@@ -1,0 +1,250 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Solution: Performing maximum likelihood estimation
+
+First, load the dataset with the reported number of cases over time, along with the simple SIR model function and the input we used in previous weeks. 
+
+
+```{r}
+rm(list=ls())
+# PACKAGES
+require(deSolve)
+require(ggplot2)
+library(TTR)
+library(tidyr)
+library(dplyr)
+library(reshape2)
+
+# Load the flu dataset of reported cases
+Nepal_data <- read.csv("NepalCovidData_V2_1.csv")
+#coronaWorldData<-read.csv(file = "owid-covid-data.csv") # From Our World with data
+reported_data<-data.frame(Nepal_data)
+reported_data$time=c(1:length(reported_data$NewCases))
+names(reported_data)
+total<-cumsum(reported_data$NewCases)
+reported_data$total<-total
+length(reported_data$NewCases)
+reported_data
+population<-29123404    # Population of Nepal
+testP<-reported_data$NewCases/reported_data$PcrTest
+reported_data$PcrTest
+################3
+# beta = no of secondary infection by single infected people/no of days required for the infection
+# gamma = 1/no of day for natural recovery
+```
+
+    Loading required package: deSolve
+    Loading required package: ggplot2
+
+
+
+```{r}
+# INPUT
+initial_state_values <- c(S = population-1,  
+                          I = 1,       
+                          R = 0)
+
+times <- seq(from = 1, to = length(reported_data$total), by = 0.05)
+
+# SIR MODEL FUNCTION
+sir_model <- function(time, state, parameters) {  
+  with(as.list(c(state, parameters)), {
+    N <- S+I+R
+    lambda <- beta * I/N
+    # The differential equations
+    dS <- -lambda * S               
+    dI <- lambda * S - gamma * I
+    dR <- gamma * I             
+    # Output
+    return(list(c(dS, dI, dR))) 
+  })
+}
+```
+
+Then, define a function (the **distance function** described to in the lecture) that simulates the model for a given combination of parameters and calculates the Poisson log-likelihood for the epidemic curve of reported cases (note that here you use the code block that you identified in the multiple-choice question):
+
+
+```{r}
+# DISTANCE FUNCTION
+
+loglik_function <- function(parameters, dat) {   # takes as inputs the parameter values and dataset
+
+   beta <- parameters[1]    # extract and save the first value in the "parameters" input argument as beta
+   gamma <- parameters[2]   # extract and save the second value in the "parameters" input argument as gamma
+    
+   # Simulate the model with initial conditions and timesteps defined above, and parameter values from function call
+   output <- as.data.frame(ode(y = initial_state_values, 
+                               times = times, 
+                               func = sir_model,
+                               parms = c(beta = beta,       # ode() takes the values for beta and gamma extracted from
+                                         gamma = gamma)))   # the "parameters" input argument of the loglik_function()
+    
+   # Calculate log-likelihood using code block 4 from the previous etivity, accounting for the reporting rate of 60%:
+   LL <- sum(dpois(x = dat$total, lambda = 0.6 * (output$I[output$time %in% dat$time]), log = TRUE))
+    
+   return(LL) 
+}
+```
+
+Finally, optimise this function using the optim() command to find the values for *beta* and *gamma* giving the highest log-likelihood value as output:
+```{r}
+# DISTANCE FUNCTION
+
+SSQ_function <- function(parameters, dat) {   # takes as inputs the parameter values and dataset
+
+   beta <- parameters[1]    # extract and save the first value in the "parameters" input argument as beta
+   gamma <- parameters[2]   # extract and save the second value in the "parameters" input argument as gamma
+    
+   # Simulate the model with initial conditions and timesteps defined above, and parameter values from function call
+   output <- as.data.frame(ode(y = initial_state_values, 
+                               times = times, 
+                               func = sir_model,
+                               parms = c(beta = beta,       # ode() takes the values for beta and gamma extracted from
+                                         gamma = gamma)))   # the "parameters" input argument of the loglik_function()
+    
+   # Calculate log-likelihood using code block 4 from the previous etivity, accounting for the reporting rate of 60%:
+      #dat <- na.omit(dat)  
+    
+    # select elements where results$time is in dat$time
+     deltas2 <- (output$I[output$time %in% dat$time]  - dat$total)^2                             
+    SSQ   <- sum(deltas2)
+    
+    return(SSQ)
+  
+}
+```
+
+
+```{r}
+# OPTIMISATION FOR LIKELYHOOD
+
+optim(par = c(0.2, 1/10),           # starting values for beta and gamma - you should get the same result no matter 
+                                   # which values you choose here
+      fn = loglik_function,        # the distance function to optimise
+      dat = reported_data,
+      method = "L-BFGS-B",
+      lower = 0.01, upper = 3,
+      
+      # the dataset to fit to ("dat" argument is passed to the function specified in fn)
+      control = list(fnscale=-1))  # tells optim() to look for the maximum number instead of the minimum (the default)
+```
+```{r}
+# OPTIMISATION FOR MSQE
+
+optim(par = c(0.26, 1/12),           # starting values for beta and gamma - you should get the same result no matter 
+                                   # which values you choose here
+      fn = SSQ_function,        # the distance function to optimise
+      dat = reported_data         # the dataset to fit to ("dat" argument is passed to the function specified in fn)
+      )
+```
+
+
+<dl>
+	<dt>$par</dt>
+		<dd><ol class=list-inline>
+	<li>1.69150959615883</li>
+	<li>0.476401376527283</li>
+</ol>
+</dd>
+	<dt>$value</dt>
+		<dd>-59.2399450939473</dd>
+	<dt>$counts</dt>
+		<dd><dl class=dl-horizontal>
+	<dt>function</dt>
+		<dd>51</dd>
+	<dt>gradient</dt>
+		<dd>&lt;NA&gt;</dd>
+</dl>
+</dd>
+	<dt>$convergence</dt>
+		<dd>0</dd>
+	<dt>$message</dt>
+		<dd>NULL</dd>
+</dl>
+
+
+
+The "par" argument of optim() gives maximum-likelihood estimates of 1.69 and 0.48 for $\beta$ and $\gamma$, respectively. With those parameters, the log-likelihood equals -59.24 ("value").
+
+Confirm that these parameter values indeed produce a good visual fit to the real data of all infected cases. In the plot below we have also added the number of reported cases for comparison.
+
+
+```{r}
+
+# Simulate the model with the estimated best-fitting parameter values
+initial_state_values <- c(S = population-1,  
+                          I = 1,       
+                          R = 0)
+
+parameters <- c(beta = 0.26,gamma = 1/15)
+
+times <- seq(from = 1, to = 500, by = 1)
+
+# SIR MODEL FUNCTION
+sir_model <- function(time, state, parameters) {  
+  
+  with(as.list(c(state, parameters)), {
+    
+    N <- S+I+R
+    
+    lambda <- beta * I/N
+    
+    # The differential equations
+    dS <- -lambda * S               
+    dI <- lambda * S - gamma * I
+    dR <- gamma * I             
+    
+    # Output
+    return(list(c(dS, dI, dR))) 
+  })
+}
+
+output <- as.data.frame(ode(y = initial_state_values, 
+                            times = times, 
+                            func = sir_model,
+                            parms = parameters))
+
+# PLOT OF THE MODEL FIT
+output_long<-melt(as.data.frame(output),id="time")
+output_long$proportion<-output_long$value/sum(initial_state_values)
+output$Reff<-(parameters["beta"]/parameters["gamma"])*(output$S/(output$S+output$I+output$R))
+
+
+ggplot() +
+  geom_line(data = output, aes(x = time, y=I/sum(initial_state_values))) +                              
+  geom_point(data = reported_data, aes(x = time, y = reported_data$NewCases/reported_data$PcrTest, colour = "DailyTest+veRatio")) + 
+  xlab("Time (days) from Jan,29,2021")+                                              
+  ylab("Ratio of Susceptible Population") +                                 
+  labs(title = paste("Model fit with beta = ", parameters["beta"], 
+                     "and gamma =", parameters["gamma"],"(Infected people Vs Time)"))
+
+ggplot(data=output_long,
+      aes(x=time,y=proportion,color=variable,group=variable))+
+geom_line()+
+xlab("time (days) From Fab,18,2021")+
+ylab("Ratio of Susceptible Population")+
+  labs(title = paste("Dynamic SIR Model  with beta = ", parameters["beta"], 
+                     "and gamma =", parameters["gamma"], colour = ""))+  
+theme(legend.position = "bottom") 
+# Plotting Reff
+ggplot(data=output,
+      aes(x=time,y=Reff))+
+      geom_line()+
+       xlab("date (days) From Fab,18,2021")+
+       ylab("Reff")+
+       labs(title="Effetive Reproduction No. with time")
+write.csv(output,file="NepalOutbreakData.csv")
+```
+
+
+![png](output_9_0.png)
+
+
+As you can see, calibrating the model to the number of reported cases and accounting for the reporting rate gives us a good fit to the total number of infections. In reality, in outbreaks we usually only have the number of reported cases, so with an assumption of the reporting rate we can use the model to predict the total number of current and future infections.
